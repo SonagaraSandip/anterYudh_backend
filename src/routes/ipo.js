@@ -177,4 +177,28 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// DELETE a Person / Demat Account column across all IPO applications
+router.delete('/person/:personName', async (req, res) => {
+  try {
+    const { personName } = req.params;
+    if (!personName) {
+      return res.status(400).json({ error: 'personName is required' });
+    }
+    const cleanPerson = decodeURIComponent(personName).trim();
+    const [result] = await db.query(
+      'DELETE FROM ipo_applications WHERE LOWER(TRIM(personName)) = LOWER(TRIM(?))',
+      [cleanPerson]
+    );
+    res.json({
+      success: true,
+      message: `Person '${cleanPerson}' applications removed successfully`,
+      deletedCount: result.affectedRows
+    });
+  } catch (err) {
+    console.error('Error deleting person applications:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
+
