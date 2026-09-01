@@ -1,25 +1,38 @@
 import express from 'express';
-import cors from "cors"
+import cors from "cors";
+import compression from 'compression';
 import dotenv from 'dotenv';
 import ipoRoutes from './src/routes/ipo.js';
 import expenseRoutes from './src/routes/expenses.js';
 import tradeRoutes from './src/routes/trades.js';
+import noteRoutes from './src/routes/notes.js';
+import buyRoutes from './src/routes/buy.js';
 import { initDatabase } from './src/db/init_ipo_db.js';
 import promisePool, { activeDbName } from './config/db.js';
 
 dotenv.config();
 const app = express();
+
+// High-speed gzip / deflate response compression
+app.use(compression({
+  threshold: 1024, // Compress responses over 1KB
+  level: 6
+}));
+
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'If-None-Match']
 }));
 
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+app.set('etag', 'strong'); // Enable ETags for browser 304 caching
 
 app.use('/api/ipos', ipoRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/trades', tradeRoutes);
+app.use('/api/notes', noteRoutes);
+app.use('/api/buy', buyRoutes);
 
 
 
