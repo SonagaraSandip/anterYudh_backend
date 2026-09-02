@@ -98,6 +98,29 @@ export const initDatabase = async () => {
       );
     `);
 
+    // Safe Column Migrations for Existing Tables
+    const safeAddColumn = async (tableName, columnName, columnDef) => {
+      try {
+        const [cols] = await db.query(`SHOW COLUMNS FROM ${tableName} LIKE ?`, [columnName]);
+        if (cols.length === 0) {
+          await db.query(`ALTER TABLE ${tableName} ADD COLUMN ${columnDef}`);
+          console.log(`✅ [Schema Migration] Added missing column '${columnName}' to table '${tableName}'`);
+        }
+      } catch (colErr) {
+        console.warn(`⚠️ [Schema Migration] Column check failed for ${tableName}.${columnName}:`, colErr.message);
+      }
+    };
+
+    // Run column migrations
+    await safeAddColumn('trades', 'transactions', 'transactions JSON DEFAULT NULL');
+    await safeAddColumn('trades', 'tradeDecision', "tradeDecision VARCHAR(100) NOT NULL DEFAULT 'Self'");
+    await safeAddColumn('trades', 'charges', 'charges DECIMAL(10, 2) NOT NULL DEFAULT 0.00');
+    await safeAddColumn('trades', 'tradeType', "tradeType ENUM('stock', 'intraday') NOT NULL DEFAULT 'stock'");
+    await safeAddColumn('ipo_applications', 'category', "category VARCHAR(50) DEFAULT 'Retail'");
+    await safeAddColumn('personal_notes', 'isPinned', 'isPinned BOOLEAN DEFAULT FALSE');
+    await safeAddColumn('personal_notes', 'color', "color VARCHAR(50) DEFAULT 'indigo'");
+    await safeAddColumn('personal_buy_items', 'savedAmount', 'savedAmount DECIMAL(12, 2) NOT NULL DEFAULT 0.00');
+
     // Performance Optimization: Safe Index Additions for Ultra-Fast Queries
     const safeAddIndex = async (tableName, indexName, indexCols) => {
       try {
@@ -117,7 +140,7 @@ export const initDatabase = async () => {
     await safeAddIndex('personal_notes', 'idx_notes_pinned_updated', 'isPinned, updatedAt');
     await safeAddIndex('personal_buy_items', 'idx_buy_priority', 'priority, updatedAt');
 
-    console.log('Database tables & performance indexes verified successfully in MySQL!');
+    console.log('Database tables, schema columns & performance indexes verified successfully in MySQL!');
   } catch (err) {
     console.error('Error creating database tables:', err);
   }
