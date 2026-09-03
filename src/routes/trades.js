@@ -22,6 +22,41 @@ const normalizeTrade = (row) => {
   };
 };
 
+/**
+ * Standard Equity Charges Auto-Calculator (Brokerage, STT, Exchange, SEBI, GST, Stamp Duty, DP)
+ */
+export const calculateTradeCharges = (quantity, price, tradeType = 'stock', isBuy = true) => {
+  const qty = parseFloat(quantity) || 0;
+  const prc = parseFloat(price) || 0;
+  const tradeValue = qty * prc;
+  if (tradeValue <= 0) return 0;
+
+  const isStock = tradeType !== 'intraday';
+
+  const brokerage = Math.min(20, tradeValue * 0.0005);
+  const exchangeCharge = tradeValue * 0.0000325;
+  const sebiCharge = tradeValue * 0.000001;
+  const gst = 0.18 * (brokerage + exchangeCharge + sebiCharge);
+
+  let stampDuty = 0;
+  let stt = 0;
+
+  if (!isStock) {
+    // Intraday
+    stampDuty = isBuy ? (tradeValue * 0.00003) : 0;
+    stt = isBuy ? 0 : (tradeValue * 0.00025);
+  } else {
+    // Delivery (stock)
+    stampDuty = isBuy ? (tradeValue * 0.00015) : 0;
+    stt = tradeValue * 0.001;
+  }
+
+  const dpCharge = (!isBuy && isStock) ? 21.50 : 0;
+
+  const totalCharges = brokerage + exchangeCharge + sebiCharge + gst + stampDuty + stt + dpCharge;
+  return Math.round(totalCharges * 100) / 100;
+};
+
 // GET /api/trades with filtering (?month=, ?quarter=, ?search=, ?year=, ?tradeType=)
 router.get('/', async (req, res) => {
   try {
@@ -90,7 +125,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// POST /api/trades - Create a new trade entry (with optional transactions)
+// POST /api/trades - Create a new trade entry (with automatic statutory charges)
 router.post('/', async (req, res) => {
   try {
     const {
@@ -116,18 +151,47 @@ router.post('/', async (req, res) => {
     const cleanBuyDate = buyDate ? buyDate.slice(0, 10) : new Date().toISOString().slice(0, 10);
     const cleanBuyPrice = parseFloat(buyPrice) || 0;
     const cleanQty = parseInt(quantity, 10) || 1;
-    const cleanCharges = parseFloat(charges) || 0;
     const cleanDecision = (tradeDecision || 'Self').trim();
     const cleanSellDate = sellDate ? sellDate.slice(0, 10) : null;
     const cleanSellPrice = sellPrice !== undefined && sellPrice !== null && sellPrice !== ''
       ? parseFloat(sellPrice)
       : null;
 
+    // Calculate auto charges if not manually specified (> 0)
+    const rawCharges = parseFloat(charges);
+    const autoBuyCharges = calculateTradeCharges(cleanQty, cleanBuyPrice, cleanTradeType, true);
+    const autoSellCharges = cleanSellPrice
+      ? calculateTradeCharges(cleanQty, cleanSellPrice, cleanTradeType, false)
+      : 0;
+
+    let cleanCharges = (!isNaN(rawCharges) && rawCharges > 0)
+      ? rawCharges
+      : (autoBuyCharges + autoSellCharges);
+
     let cleanTransactionsJson = null;
     if (Array.isArray(transactions) && transactions.length > 0) {
-      cleanTransactionsJson = JSON.stringify(transactions);
+      // Ensure each transaction leg has valid auto charges if empty/0
+      const processedTx = transactions.map((tx) => {
+        const isBuy = tx.type !== 'SELL';
+        const txQty = parseInt(tx.quantity, 10) || cleanQty;
+        const txPrice = parseFloat(tx.price) || 0;
+        const txCharges = parseFloat(tx.charges);
+        const legCharge = (!isNaN(txCharges) && txCharges > 0)
+          ? txCharges
+          : calculateTradeCharges(txQty, txPrice, cleanTradeType, isBuy);
+        return {
+          ...tx,
+          charges: legCharge
+        };
+      });
+      cleanTransactionsJson = JSON.stringify(processedTx);
+      cleanCharges = processedTx.reduce((sum, tx) => sum + (parseFloat(tx.charges) || 0), 0);
     } else {
-      // Build default initial BUY transaction leg
+      // Build default initial BUY + optional SELL transaction legs with auto charges
+      const buyLegCharge = (!isNaN(rawCharges) && rawCharges > 0 && !cleanSellPrice)
+        ? rawCharges
+        : autoBuyCharges;
+
       cleanTransactionsJson = JSON.stringify([
         {
           id: `leg-buy-${Date.now()}`,
@@ -135,7 +199,7 @@ router.post('/', async (req, res) => {
           date: cleanBuyDate,
           price: cleanBuyPrice,
           quantity: cleanQty,
-          charges: cleanCharges,
+          charges: buyLegCharge,
           notes: notes || 'Initial Entry'
         },
         ...(cleanSellPrice ? [{
@@ -144,7 +208,7 @@ router.post('/', async (req, res) => {
           date: cleanSellDate || cleanBuyDate,
           price: cleanSellPrice,
           quantity: cleanQty,
-          charges: 0,
+          charges: autoSellCharges,
           notes: 'Full Exit'
         }] : [])
       ]);
@@ -177,8 +241,8 @@ router.post('/', async (req, res) => {
   }
 });
 
-// PUT /api/trades/:id - Update an existing trade
-router.put('/:id', async (req, res) => {
+// Common updater for PUT & PATCH /api/trades/:id
+const handleUpdateTrade = async (req, res) => {
   try {
     const { id } = req.params;
     const {
@@ -195,12 +259,19 @@ router.put('/:id', async (req, res) => {
       transactions
     } = req.body;
 
+    const [existingRows] = await db.query('SELECT * FROM trades WHERE id = ?', [id]);
+    if (existingRows.length === 0) {
+      return res.status(404).json({ error: 'Trade not found' });
+    }
+    const currentTrade = normalizeTrade(existingRows[0]);
+
     const updates = [];
     const params = [];
 
+    const finalTradeType = tradeType !== undefined ? (tradeType === 'intraday' ? 'intraday' : 'stock') : currentTrade.tradeType;
     if (tradeType !== undefined) {
       updates.push('tradeType = ?');
-      params.push(tradeType === 'intraday' ? 'intraday' : 'stock');
+      params.push(finalTradeType);
     }
     if (assetName !== undefined) {
       updates.push('assetName = ?');
@@ -210,18 +281,27 @@ router.put('/:id', async (req, res) => {
       updates.push('buyDate = ?');
       params.push(buyDate ? buyDate.slice(0, 10) : new Date().toISOString().slice(0, 10));
     }
+
+    const finalBuyPrice = buyPrice !== undefined ? (parseFloat(buyPrice) || 0) : parseFloat(currentTrade.buyPrice || 0);
     if (buyPrice !== undefined) {
       updates.push('buyPrice = ?');
-      params.push(parseFloat(buyPrice) || 0);
+      params.push(finalBuyPrice);
     }
+
+    const finalQty = quantity !== undefined ? (parseInt(quantity, 10) || 1) : parseInt(currentTrade.quantity || 1, 10);
     if (quantity !== undefined) {
       updates.push('quantity = ?');
-      params.push(parseInt(quantity, 10) || 1);
+      params.push(finalQty);
     }
-    if (charges !== undefined) {
-      updates.push('charges = ?');
-      params.push(parseFloat(charges) || 0);
+
+    const finalSellPrice = sellPrice !== undefined
+      ? (sellPrice !== null && sellPrice !== '' ? parseFloat(sellPrice) : null)
+      : (currentTrade.sellPrice !== null && currentTrade.sellPrice !== undefined ? parseFloat(currentTrade.sellPrice) : null);
+    if (sellPrice !== undefined) {
+      updates.push('sellPrice = ?');
+      params.push(finalSellPrice);
     }
+
     if (tradeDecision !== undefined) {
       updates.push('tradeDecision = ?');
       params.push(tradeDecision.trim());
@@ -230,19 +310,50 @@ router.put('/:id', async (req, res) => {
       updates.push('sellDate = ?');
       params.push(sellDate ? sellDate.slice(0, 10) : null);
     }
-    if (sellPrice !== undefined) {
-      updates.push('sellPrice = ?');
-      params.push(
-        sellPrice !== null && sellPrice !== '' ? parseFloat(sellPrice) : null
-      );
-    }
     if (notes !== undefined) {
       updates.push('notes = ?');
       params.push(notes);
     }
+
+    // Process transactions & auto-calculate charges if not explicitly given
     if (transactions !== undefined) {
-      updates.push('transactions = ?');
-      params.push(Array.isArray(transactions) ? JSON.stringify(transactions) : null);
+      if (Array.isArray(transactions)) {
+        const processedTx = transactions.map((tx) => {
+          const isBuy = tx.type !== 'SELL';
+          const txQty = parseInt(tx.quantity, 10) || finalQty;
+          const txPrice = parseFloat(tx.price) || 0;
+          const txCharges = parseFloat(tx.charges);
+          const legCharge = (!isNaN(txCharges) && txCharges > 0)
+            ? txCharges
+            : calculateTradeCharges(txQty, txPrice, finalTradeType, isBuy);
+          return {
+            ...tx,
+            charges: legCharge
+          };
+        });
+        updates.push('transactions = ?');
+        params.push(JSON.stringify(processedTx));
+
+        // Auto sum total charges from transaction legs
+        const computedTotalCharges = processedTx.reduce((sum, tx) => sum + (parseFloat(tx.charges) || 0), 0);
+        updates.push('charges = ?');
+        params.push(computedTotalCharges);
+      } else {
+        updates.push('transactions = ?');
+        params.push(null);
+      }
+    } else if (charges !== undefined) {
+      const explicitCharges = parseFloat(charges);
+      if (!isNaN(explicitCharges) && explicitCharges > 0) {
+        updates.push('charges = ?');
+        params.push(explicitCharges);
+      } else {
+        // Auto-recalculate
+        const autoBuy = calculateTradeCharges(finalQty, finalBuyPrice, finalTradeType, true);
+        const autoSell = finalSellPrice ? calculateTradeCharges(finalQty, finalSellPrice, finalTradeType, false) : 0;
+        updates.push('charges = ?');
+        params.push(autoBuy + autoSell);
+      }
     }
 
     if (updates.length === 0) {
@@ -253,16 +364,16 @@ router.put('/:id', async (req, res) => {
     await db.query(`UPDATE trades SET ${updates.join(', ')} WHERE id = ?`, params);
 
     const [updated] = await db.query('SELECT * FROM trades WHERE id = ?', [id]);
-    if (updated.length === 0) {
-      return res.status(404).json({ error: 'Trade not found' });
-    }
-
     res.json(normalizeTrade(updated[0]));
   } catch (err) {
     console.error('Error updating trade entry:', err);
     res.status(500).json({ error: err.message });
   }
-});
+};
+
+// PUT & PATCH /api/trades/:id
+router.put('/:id', handleUpdateTrade);
+router.patch('/:id', handleUpdateTrade);
 
 // POST /api/trades/:id/partial-sell - Record a partial exit leg
 router.post('/:id/partial-sell', async (req, res) => {
@@ -278,7 +389,10 @@ router.post('/:id/partial-sell', async (req, res) => {
     const trade = normalizeTrade(rows[0]);
     const sellQty = parseInt(quantity, 10) || 1;
     const sellPrice = parseFloat(price) || 0;
-    const sellCharges = parseFloat(charges) || 0;
+    const parsedCharges = parseFloat(charges);
+    const sellCharges = (!isNaN(parsedCharges) && parsedCharges > 0)
+      ? parsedCharges
+      : calculateTradeCharges(sellQty, sellPrice, trade.tradeType, false);
     const sellDate = date ? date.slice(0, 10) : new Date().toISOString().slice(0, 10);
 
     // Create current transactions list if empty
@@ -290,7 +404,7 @@ router.post('/:id/partial-sell', async (req, res) => {
           date: trade.buyDate,
           price: parseFloat(trade.buyPrice) || 0,
           quantity: parseInt(trade.quantity, 10) || 1,
-          charges: parseFloat(trade.charges) || 0,
+          charges: parseFloat(trade.charges) || calculateTradeCharges(trade.quantity, trade.buyPrice, trade.tradeType, true),
           notes: trade.notes || 'Initial Entry'
         }];
 
@@ -362,7 +476,10 @@ router.post('/:id/partial-buy', async (req, res) => {
     const trade = normalizeTrade(rows[0]);
     const buyQty = parseInt(quantity, 10) || 1;
     const buyPrice = parseFloat(price) || 0;
-    const buyCharges = parseFloat(charges) || 0;
+    const parsedCharges = parseFloat(charges);
+    const buyCharges = (!isNaN(parsedCharges) && parsedCharges > 0)
+      ? parsedCharges
+      : calculateTradeCharges(buyQty, buyPrice, trade.tradeType, true);
     const buyDate = date ? date.slice(0, 10) : new Date().toISOString().slice(0, 10);
 
     let txList = Array.isArray(trade.transactions) && trade.transactions.length > 0
@@ -373,7 +490,7 @@ router.post('/:id/partial-buy', async (req, res) => {
           date: trade.buyDate,
           price: parseFloat(trade.buyPrice) || 0,
           quantity: parseInt(trade.quantity, 10) || 1,
-          charges: parseFloat(trade.charges) || 0,
+          charges: parseFloat(trade.charges) || calculateTradeCharges(trade.quantity, trade.buyPrice, trade.tradeType, true),
           notes: trade.notes || 'Initial Entry'
         }];
 
