@@ -6,6 +6,16 @@ node_modules/
 .env.*
 !.env.example
 
+# Service Account Credentials & Keys
+config/google-service-account.json
+config/google_credentials.json
+*.json.key
+
+# Database Backups & Dumps
+backups/
+*.sql
+*.sql.gz
+
 # Logs
 logs
 *.log

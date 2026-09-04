@@ -7,8 +7,12 @@ import expenseRoutes from './src/routes/expenses.js';
 import tradeRoutes from './src/routes/trades.js';
 import noteRoutes from './src/routes/notes.js';
 import buyRoutes from './src/routes/buy.js';
+import backupRoutes from './src/routes/backup.js';
 import { initDatabase } from './src/db/init_ipo_db.js';
 import promisePool, { activeDbName } from './config/db.js';
+import cron from 'node-cron';
+import { dumpDatabase } from './src/utils/dbDumper.js';
+import { uploadBackupToDrive, cleanOldDriveBackups } from './src/utils/googleDrive.js';
 
 dotenv.config();
 const app = express();
@@ -33,8 +37,7 @@ app.use('/api/expenses', expenseRoutes);
 app.use('/api/trades', tradeRoutes);
 app.use('/api/notes', noteRoutes);
 app.use('/api/buy', buyRoutes);
-
-
+app.use('/api/backup', backupRoutes);
 
 // System Status Endpoint (verifies active DB connectivity in real-time)
 app.get('/api/system/status', async (req, res) => {
@@ -69,10 +72,39 @@ app.get('/api/system/status', async (req, res) => {
   }
 });
 
+// Setup Automated Daily Midnight Backup Cron (00:00 AM)
+const setupBackupCron = () => {
+  const isAutoBackupEnabled = process.env.ENABLE_AUTO_BACKUP === 'true';
+  if (!isAutoBackupEnabled) {
+    console.log('ℹ️ [Cron] Automated database backup is disabled (ENABLE_AUTO_BACKUP != true)');
+    return;
+  }
+
+  // Runs every day at 00:00 midnight
+  cron.schedule('0 0 * * *', async () => {
+    console.log('⏰ [Cron] Triggering scheduled midnight database backup...');
+    try {
+      const dump = await dumpDatabase();
+      try {
+        await uploadBackupToDrive(dump.gzPath, dump.filename);
+        await cleanOldDriveBackups();
+        console.log('✅ [Cron] Daily backup uploaded to Google Drive successfully.');
+      } catch (driveErr) {
+        console.warn('⚠️ [Cron] Google Drive upload failed:', driveErr.message);
+      }
+    } catch (dumpErr) {
+      console.error('❌ [Cron] Automated backup failed:', dumpErr.message);
+    }
+  });
+
+  console.log('🕒 [Cron] Automated daily backup scheduled for 00:00 (Midnight) every day');
+};
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, async () => {
     console.log(`Server running on port ${PORT}`);
     await initDatabase();
+    setupBackupCron();
 });
 
 
