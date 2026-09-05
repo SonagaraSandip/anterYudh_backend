@@ -1,5 +1,6 @@
 import express from 'express';
 import db from '../../config/db.js';
+import { getLocalDateString } from '../utils/dateHelper.js';
 
 const router = express.Router();
 
@@ -148,11 +149,11 @@ router.post('/', async (req, res) => {
 
     const cleanTradeType = tradeType === 'intraday' ? 'intraday' : 'stock';
     const cleanAssetName = assetName.trim().toUpperCase();
-    const cleanBuyDate = buyDate ? buyDate.slice(0, 10) : new Date().toISOString().slice(0, 10);
+    const cleanBuyDate = getLocalDateString(buyDate);
     const cleanBuyPrice = parseFloat(buyPrice) || 0;
     const cleanQty = parseInt(quantity, 10) || 1;
     const cleanDecision = (tradeDecision || 'Self').trim();
-    const cleanSellDate = sellDate ? sellDate.slice(0, 10) : null;
+    const cleanSellDate = sellDate ? getLocalDateString(sellDate) : null;
     const cleanSellPrice = sellPrice !== undefined && sellPrice !== null && sellPrice !== ''
       ? parseFloat(sellPrice)
       : null;
@@ -279,7 +280,7 @@ const handleUpdateTrade = async (req, res) => {
     }
     if (buyDate !== undefined) {
       updates.push('buyDate = ?');
-      params.push(buyDate ? buyDate.slice(0, 10) : new Date().toISOString().slice(0, 10));
+      params.push(getLocalDateString(buyDate));
     }
 
     const finalBuyPrice = buyPrice !== undefined ? (parseFloat(buyPrice) || 0) : parseFloat(currentTrade.buyPrice || 0);
@@ -393,7 +394,7 @@ router.post('/:id/partial-sell', async (req, res) => {
     const sellCharges = (!isNaN(parsedCharges) && parsedCharges > 0)
       ? parsedCharges
       : calculateTradeCharges(sellQty, sellPrice, trade.tradeType, false);
-    const sellDate = date ? date.slice(0, 10) : new Date().toISOString().slice(0, 10);
+    const sellDate = getLocalDateString(date);
 
     // Create current transactions list if empty
     let txList = Array.isArray(trade.transactions) && trade.transactions.length > 0
@@ -480,7 +481,7 @@ router.post('/:id/partial-buy', async (req, res) => {
     const buyCharges = (!isNaN(parsedCharges) && parsedCharges > 0)
       ? parsedCharges
       : calculateTradeCharges(buyQty, buyPrice, trade.tradeType, true);
-    const buyDate = date ? date.slice(0, 10) : new Date().toISOString().slice(0, 10);
+    const buyDate = getLocalDateString(date);
 
     let txList = Array.isArray(trade.transactions) && trade.transactions.length > 0
       ? [...trade.transactions]

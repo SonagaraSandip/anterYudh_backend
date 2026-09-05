@@ -1,5 +1,6 @@
 import express from 'express';
 import db from '../../config/db.js';
+import { getLocalMySQLDateTime } from '../utils/dateHelper.js';
 
 const router = express.Router();
 
@@ -54,15 +55,8 @@ router.post('/', async (req, res) => {
     const cleanCategory = (category || (cleanType === 'income' ? 'Salary' : 'General')).trim();
     const cleanPaymentMode = (paymentMode || 'UPI / GPay').trim();
 
-    // Format transactionDate properly for MySQL DATETIME
-    let finalDate = new Date();
-    if (transactionDate) {
-      const parsed = new Date(transactionDate);
-      if (!isNaN(parsed.getTime())) {
-        finalDate = parsed;
-      }
-    }
-    const formattedDate = finalDate.toISOString().slice(0, 19).replace('T', ' ');
+    // Format transactionDate properly for MySQL DATETIME in local timezone
+    const formattedDate = getLocalMySQLDateTime(transactionDate);
 
     const [result] = await db.query(
       `INSERT INTO cashflow_transactions 
@@ -117,12 +111,8 @@ router.put('/:id', async (req, res) => {
       params.push(notes);
     }
     if (transactionDate !== undefined) {
-      const parsed = new Date(transactionDate);
-      const formattedDate = !isNaN(parsed.getTime())
-        ? parsed.toISOString().slice(0, 19).replace('T', ' ')
-        : new Date().toISOString().slice(0, 19).replace('T', ' ');
       updates.push('transactionDate = ?');
-      params.push(formattedDate);
+      params.push(getLocalMySQLDateTime(transactionDate));
     }
 
     if (updates.length === 0) {

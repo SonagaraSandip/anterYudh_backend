@@ -8,6 +8,7 @@ import tradeRoutes from './src/routes/trades.js';
 import noteRoutes from './src/routes/notes.js';
 import buyRoutes from './src/routes/buy.js';
 import backupRoutes from './src/routes/backup.js';
+import dashboardRoutes from './src/routes/dashboard.js';
 import { initDatabase } from './src/db/init_ipo_db.js';
 import promisePool, { activeDbName } from './config/db.js';
 import cron from 'node-cron';
@@ -32,6 +33,7 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.set('etag', 'strong'); // Enable ETags for browser 304 caching
 
+app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/ipos', ipoRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/trades', tradeRoutes);
