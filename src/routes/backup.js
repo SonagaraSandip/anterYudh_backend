@@ -3,9 +3,10 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { dumpDatabase } from '../utils/dbDumper.js';
-import { uploadBackupToDrive, listDriveBackups, cleanOldDriveBackups } from '../utils/googleDrive.js';
+import { uploadBackupToDrive, listDriveBackups, cleanOldDriveBackups, isDriveConfigured } from '../utils/googleDrive.js';
 import { restoreDatabaseFromFile } from '../utils/dbRestorer.js';
-import { activeDbName } from '../../config/db.js';
+import { getLatestBackupInfo, recordBackupLog } from '../utils/backupTracker.js';
+import promisePool, { activeDbName } from '../../config/db.js';
 
 const router = express.Router();
 const __filename = fileURLToPath(import.meta.url);
@@ -14,34 +15,23 @@ const BACKUPS_DIR = path.resolve(__dirname, '../../backups');
 
 /**
  * GET /api/backup/status
- * Returns Google Drive backup config and service health
+ * Returns Google Drive backup config, service health, and latest backup timestamp
  */
 router.get('/status', async (req, res) => {
   try {
+    const isConfigured = isDriveConfigured();
     const hasFolderId = !!process.env.GOOGLE_DRIVE_BACKUP_FOLDER_ID;
     const hasOAuth = !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_REFRESH_TOKEN);
+    const hasInlineKey = !!process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
     const hasKeyPath = !!process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH ||
       fs.existsSync(path.resolve(__dirname, '../../config/google-service-account.json')) ||
       fs.existsSync(path.resolve(__dirname, '../../config/google_credentials.json'));
     
-    const isConfigured = hasFolderId && (hasOAuth || hasKeyPath);
     const isAutoBackupEnabled = process.env.ENABLE_AUTO_BACKUP === 'true';
     const retentionDays = parseInt(process.env.BACKUP_RETENTION_DAYS, 10) || 30;
 
-    // Find latest backup timestamp from local directory
-    let lastBackupTime = null;
-    let lastBackupName = null;
-    if (fs.existsSync(BACKUPS_DIR)) {
-      const files = fs.readdirSync(BACKUPS_DIR)
-        .filter(f => f.endsWith('.sql') || f.endsWith('.sql.gz'))
-        .map(f => ({ name: f, time: fs.statSync(path.join(BACKUPS_DIR, f)).mtime }))
-        .sort((a, b) => b.time - a.time);
-
-      if (files.length > 0) {
-        lastBackupTime = files[0].time;
-        lastBackupName = files[0].name;
-      }
-    }
+    // Retrieve latest backup info from DB logs, Google Drive, and local filesystem
+    const { lastBackupTime, lastBackupName, lastBackupSource } = await getLatestBackupInfo();
 
     res.json({
       success: true,
@@ -49,12 +39,14 @@ router.get('/status', async (req, res) => {
       isConfigured,
       hasFolderId,
       hasOAuth,
+      hasInlineKey,
       hasKeyPath,
       isAutoBackupEnabled,
       retentionDays,
       schedule: isAutoBackupEnabled ? 'Every day at 00:00 (Midnight)' : 'Disabled',
       lastBackupTime,
-      lastBackupName
+      lastBackupName,
+      lastBackupSource
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -63,7 +55,7 @@ router.get('/status', async (req, res) => {
 
 /**
  * GET /api/backup/list
- * Lists backups from both local disk and Google Drive
+ * Lists backups from both local disk, MySQL backup logs, and Google Drive
  */
 router.get('/list', async (req, res) => {
   try {
@@ -83,18 +75,40 @@ router.get('/list', async (req, res) => {
       }
     }
 
+    let dbBackups = [];
+    try {
+      const [rows] = await promisePool.query(
+        'SELECT * FROM backup_logs ORDER BY createdAt DESC LIMIT 20'
+      );
+      dbBackups = rows.map(r => ({
+        id: r.id,
+        name: r.filename,
+        sizeBytes: r.sizeBytes,
+        sizeKB: (r.sizeBytes / 1024).toFixed(2),
+        driveFileId: r.driveFileId,
+        status: r.status,
+        source: r.source,
+        createdAt: r.createdAt
+      }));
+    } catch {
+      // Table might be initializing
+    }
+
     let driveBackups = [];
     let driveError = null;
-    try {
-      driveBackups = await listDriveBackups();
-    } catch (dErr) {
-      driveError = dErr.message;
+    if (isDriveConfigured()) {
+      try {
+        driveBackups = await listDriveBackups();
+      } catch (dErr) {
+        driveError = dErr.message;
+      }
     }
 
     res.json({
       success: true,
       database: activeDbName,
       localBackups: localBackups.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)),
+      dbBackups,
       driveBackups,
       driveError
     });
@@ -105,7 +119,7 @@ router.get('/list', async (req, res) => {
 
 /**
  * POST /api/backup/trigger
- * Manually creates a new backup and uploads to Google Drive
+ * Manually creates a new backup and uploads to Google Drive, then logs to persistent DB
  */
 router.post('/trigger', async (req, res) => {
   try {
@@ -115,13 +129,24 @@ router.post('/trigger', async (req, res) => {
     let driveResult = null;
     let driveError = null;
 
-    try {
-      driveResult = await uploadBackupToDrive(dumpResult.gzPath, dumpResult.filename);
-      await cleanOldDriveBackups();
-    } catch (dErr) {
-      driveError = dErr.message;
-      console.warn(`[API] Google Drive upload failed: ${dErr.message}`);
+    if (isDriveConfigured()) {
+      try {
+        driveResult = await uploadBackupToDrive(dumpResult.gzPath, dumpResult.filename);
+        await cleanOldDriveBackups();
+      } catch (dErr) {
+        driveError = dErr.message;
+        console.warn(`[API] Google Drive upload failed: ${dErr.message}`);
+      }
     }
+
+    // Persist to MySQL backup_logs table so it works across deployments & server restarts
+    await recordBackupLog({
+      filename: dumpResult.filename,
+      sizeBytes: dumpResult.sizeBytes,
+      driveFileId: driveResult?.id || null,
+      status: driveResult ? 'success' : (driveError ? 'partial' : 'local'),
+      source: 'manual'
+    });
 
     res.json({
       success: true,

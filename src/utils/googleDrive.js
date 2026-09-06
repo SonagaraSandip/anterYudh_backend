@@ -32,9 +32,30 @@ function getServiceAccountKeyPath() {
 }
 
 /**
+ * Checks if Google Drive backup configuration is present
+ */
+export function isDriveConfigured() {
+  const hasFolderId = !!process.env.GOOGLE_DRIVE_BACKUP_FOLDER_ID;
+  const hasOAuth = !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_REFRESH_TOKEN);
+  const hasInlineKey = !!process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
+  let hasKeyPath = false;
+  try {
+    hasKeyPath = !!process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH ||
+      fs.existsSync(path.resolve(__dirname, '../../config/google-service-account.json')) ||
+      fs.existsSync(path.resolve(__dirname, '../../config/google_credentials.json'));
+  } catch {
+    hasKeyPath = false;
+  }
+
+  return hasFolderId && (hasOAuth || hasInlineKey || hasKeyPath);
+}
+
+/**
  * Initializes and returns an authenticated Google Drive client
- * Supports both OAuth2 Refresh Token (recommended for personal Gmail 15GB storage)
- * and Google Cloud Service Account.
+ * Supports:
+ * 1. OAuth2 Refresh Token (Recommended for personal Gmail 15GB storage)
+ * 2. GOOGLE_SERVICE_ACCOUNT_KEY (Inline JSON string for cloud/GitHub deployment platforms like Render, Railway, Heroku)
+ * 3. Service Account Key JSON file path
  */
 export function getDriveClient() {
   // Option 1: OAuth2 Refresh Token (Best for personal @gmail.com accounts)
@@ -50,7 +71,24 @@ export function getDriveClient() {
     return google.drive({ version: 'v3', auth: oauth2Client });
   }
 
-  // Option 2: Service Account Key JSON
+  // Option 2: Inline Service Account Key JSON from environment variable (ideal for cloud deploys)
+  if (process.env.GOOGLE_SERVICE_ACCOUNT_KEY) {
+    let credentials;
+    try {
+      credentials = typeof process.env.GOOGLE_SERVICE_ACCOUNT_KEY === 'string'
+        ? JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY)
+        : process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
+    } catch (e) {
+      throw new Error(`Failed to parse GOOGLE_SERVICE_ACCOUNT_KEY environment JSON: ${e.message}`);
+    }
+    const auth = new google.auth.GoogleAuth({
+      credentials,
+      scopes: ['https://www.googleapis.com/auth/drive']
+    });
+    return google.drive({ version: 'v3', auth });
+  }
+
+  // Option 3: Service Account Key JSON File on disk
   const keyFilePath = getServiceAccountKeyPath();
   const auth = new google.auth.GoogleAuth({
     keyFile: keyFilePath,

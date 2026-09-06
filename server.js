@@ -7,6 +7,8 @@ import expenseRoutes from './src/routes/expenses.js';
 import tradeRoutes from './src/routes/trades.js';
 import noteRoutes from './src/routes/notes.js';
 import buyRoutes from './src/routes/buy.js';
+import skillRoutes from './src/routes/skills.js';
+import bookRoutes from './src/routes/books.js';
 import backupRoutes from './src/routes/backup.js';
 import dashboardRoutes from './src/routes/dashboard.js';
 import { initDatabase } from './src/db/init_ipo_db.js';
@@ -14,6 +16,7 @@ import promisePool, { activeDbName } from './config/db.js';
 import cron from 'node-cron';
 import { dumpDatabase } from './src/utils/dbDumper.js';
 import { uploadBackupToDrive, cleanOldDriveBackups } from './src/utils/googleDrive.js';
+import { recordBackupLog } from './src/utils/backupTracker.js';
 
 dotenv.config();
 const app = express();
@@ -39,6 +42,8 @@ app.use('/api/expenses', expenseRoutes);
 app.use('/api/trades', tradeRoutes);
 app.use('/api/notes', noteRoutes);
 app.use('/api/buy', buyRoutes);
+app.use('/api/skills', skillRoutes);
+app.use('/api/books', bookRoutes);
 app.use('/api/backup', backupRoutes);
 
 // System Status Endpoint (verifies active DB connectivity in real-time)
@@ -87,13 +92,22 @@ const setupBackupCron = () => {
     console.log('⏰ [Cron] Triggering scheduled midnight database backup...');
     try {
       const dump = await dumpDatabase();
+      let driveRes = null;
       try {
-        await uploadBackupToDrive(dump.gzPath, dump.filename);
+        driveRes = await uploadBackupToDrive(dump.gzPath, dump.filename);
         await cleanOldDriveBackups();
         console.log('✅ [Cron] Daily backup uploaded to Google Drive successfully.');
       } catch (driveErr) {
         console.warn('⚠️ [Cron] Google Drive upload failed:', driveErr.message);
       }
+
+      await recordBackupLog({
+        filename: dump.filename,
+        sizeBytes: dump.sizeBytes,
+        driveFileId: driveRes?.id || null,
+        status: driveRes ? 'success' : 'local',
+        source: 'cron'
+      });
     } catch (dumpErr) {
       console.error('❌ [Cron] Automated backup failed:', dumpErr.message);
     }

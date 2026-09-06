@@ -3,6 +3,15 @@ import db from '../../config/db.js';
 
 const router = express.Router();
 
+const normalizeNote = (row) => {
+  if (!row) return null;
+  return {
+    ...row,
+    isSecret: Boolean(row.isSecret),
+    isPinned: Boolean(row.isPinned)
+  };
+};
+
 // GET all notes (pinned first, then latest updated)
 router.get('/', async (req, res) => {
   try {
@@ -10,7 +19,7 @@ router.get('/', async (req, res) => {
       SELECT * FROM personal_notes 
       ORDER BY isPinned DESC, updatedAt DESC, id DESC
     `);
-    res.json(rows);
+    res.json(rows.map(normalizeNote));
   } catch (err) {
     console.error('Error fetching notes:', err);
     res.status(500).json({ error: 'Failed to fetch personal notes' });
@@ -39,7 +48,7 @@ router.post('/', async (req, res) => {
     );
 
     const [newNote] = await db.query('SELECT * FROM personal_notes WHERE id = ?', [result.insertId]);
-    res.status(201).json(newNote[0]);
+    res.status(201).json(normalizeNote(newNote[0]));
   } catch (err) {
     console.error('Error creating note:', err);
     res.status(500).json({ error: 'Failed to create note' });
@@ -75,7 +84,7 @@ router.put('/:id', async (req, res) => {
     if (updated.length === 0) {
       return res.status(404).json({ error: 'Note not found' });
     }
-    res.json(updated[0]);
+    res.json(normalizeNote(updated[0]));
   } catch (err) {
     console.error('Error updating note:', err);
     res.status(500).json({ error: 'Failed to update note' });
@@ -95,7 +104,7 @@ router.patch('/:id/pin', async (req, res) => {
     await db.query('UPDATE personal_notes SET isPinned = ? WHERE id = ?', [newPinned, id]);
 
     const [updated] = await db.query('SELECT * FROM personal_notes WHERE id = ?', [id]);
-    res.json(updated[0]);
+    res.json(normalizeNote(updated[0]));
   } catch (err) {
     console.error('Error toggling pin:', err);
     res.status(500).json({ error: 'Failed to toggle pin state' });

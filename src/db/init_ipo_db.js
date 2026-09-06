@@ -98,6 +98,55 @@ export const initDatabase = async () => {
       );
     `);
 
+    // 7. Persistent Backup Logs & Timestamps Table (Ensures cloud & GitHub deploys preserve last backup status)
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS backup_logs (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        filename VARCHAR(255) NOT NULL,
+        sizeBytes BIGINT DEFAULT 0,
+        driveFileId VARCHAR(255) DEFAULT NULL,
+        status VARCHAR(50) DEFAULT 'success',
+        source VARCHAR(50) DEFAULT 'manual',
+        createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // 8. Learning Skills Tracker Table
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS learning_skills (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        category VARCHAR(100) DEFAULT 'Technical',
+        status ENUM('Planned', 'Learning', 'Completed') DEFAULT 'Planned',
+        priority ENUM('High', 'Medium', 'Low') DEFAULT 'Medium',
+        progress INT DEFAULT 0,
+        targetDate DATE NULL,
+        resources TEXT NULL,
+        notes TEXT NULL,
+        createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      );
+    `);
+
+    // 9. Reading Books Tracker Table
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS reading_books (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        title VARCHAR(255) NOT NULL,
+        author VARCHAR(255) DEFAULT '',
+        category VARCHAR(100) DEFAULT 'Finance & Investing',
+        status ENUM('Want to Read', 'Reading', 'Completed') DEFAULT 'Want to Read',
+        priority ENUM('High', 'Medium', 'Low') DEFAULT 'Medium',
+        rating INT DEFAULT 0,
+        progressPages INT DEFAULT 0,
+        totalPages INT DEFAULT 0,
+        keyTakeaways TEXT NULL,
+        notes TEXT NULL,
+        createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      );
+    `);
+
     // Safe Column Migrations for Existing Tables
     const safeAddColumn = async (tableName, columnName, columnDef) => {
       try {
@@ -139,6 +188,8 @@ export const initDatabase = async () => {
     await safeAddIndex('trades', 'idx_trades_buydate_type', 'buyDate, tradeType');
     await safeAddIndex('personal_notes', 'idx_notes_pinned_updated', 'isPinned, updatedAt');
     await safeAddIndex('personal_buy_items', 'idx_buy_priority', 'priority, updatedAt');
+    await safeAddIndex('learning_skills', 'idx_skills_status_priority', 'status, priority, updatedAt');
+    await safeAddIndex('reading_books', 'idx_books_status_priority', 'status, priority, updatedAt');
 
     console.log('Database tables, schema columns & performance indexes verified successfully in MySQL!');
   } catch (err) {
