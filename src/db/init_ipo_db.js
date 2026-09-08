@@ -166,6 +166,14 @@ export const initDatabase = async () => {
     await safeAddColumn('trades', 'charges', 'charges DECIMAL(10, 2) NOT NULL DEFAULT 0.00');
     await safeAddColumn('trades', 'tradeType', "tradeType ENUM('stock', 'intraday') NOT NULL DEFAULT 'stock'");
     await safeAddColumn('ipo_applications', 'category', "category VARCHAR(50) DEFAULT 'Retail'");
+    await safeAddColumn('ipo_applications', 'allottedShares', "allottedShares INT DEFAULT 0");
+    await safeAddColumn('ipo_applications', 'allottedPrice', "allottedPrice DECIMAL(12, 2) DEFAULT 0.00");
+    await safeAddColumn('ipo_applications', 'sellPrice', "sellPrice DECIMAL(12, 2) DEFAULT NULL");
+    await safeAddColumn('ipo_applications', 'sellDate', "sellDate DATE DEFAULT NULL");
+    await safeAddColumn('ipo_applications', 'charges', "charges DECIMAL(10, 2) DEFAULT 0.00");
+    await safeAddColumn('ipo_applications', 'transactions', "transactions JSON DEFAULT NULL");
+    await safeAddColumn('ipos', 'lotSize', "lotSize INT DEFAULT 0");
+    await safeAddColumn('ipos', 'issuePrice', "issuePrice DECIMAL(12, 2) DEFAULT 0.00");
     await safeAddColumn('personal_notes', 'isPinned', 'isPinned BOOLEAN DEFAULT FALSE');
     await safeAddColumn('personal_notes', 'color', "color VARCHAR(50) DEFAULT 'indigo'");
     await safeAddColumn('personal_buy_items', 'savedAmount', 'savedAmount DECIMAL(12, 2) NOT NULL DEFAULT 0.00');

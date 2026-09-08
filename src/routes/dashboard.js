@@ -30,6 +30,34 @@ const normalizeTrade = (row) => {
   };
 };
 
+// Helper to normalize application row with clean types and parsed JSON transactions
+const normalizeApplication = (app) => {
+  if (!app) return null;
+  let parsedTransactions = [];
+  try {
+    if (typeof app.transactions === 'string') {
+      parsedTransactions = JSON.parse(app.transactions || '[]');
+    } else if (Array.isArray(app.transactions)) {
+      parsedTransactions = app.transactions;
+    }
+  } catch {
+    parsedTransactions = [];
+  }
+
+  return {
+    ...app,
+    applied: Boolean(app.applied),
+    allotted: Boolean(app.allotted),
+    category: app.category || 'Retail',
+    allottedShares: app.allottedShares !== undefined && app.allottedShares !== null ? parseInt(app.allottedShares, 10) || 0 : 0,
+    allottedPrice: app.allottedPrice !== undefined && app.allottedPrice !== null ? parseFloat(app.allottedPrice) || 0 : 0,
+    sellPrice: app.sellPrice !== undefined && app.sellPrice !== null && app.sellPrice !== '' ? parseFloat(app.sellPrice) : null,
+    sellDate: app.sellDate ? String(app.sellDate).slice(0, 10) : null,
+    charges: app.charges !== undefined && app.charges !== null ? parseFloat(app.charges) || 0 : 0,
+    transactions: parsedTransactions
+  };
+};
+
 /**
  * GET /api/dashboard/summary
  * Returns combined data for MainDashboard in 1 single compressed fast round-trip
@@ -65,12 +93,7 @@ router.get('/summary', async (req, res) => {
       ...ipo,
       applications: appsRows
         .filter((app) => app.ipoId === ipo.id)
-        .map((app) => ({
-          ...app,
-          applied: Boolean(app.applied),
-          allotted: Boolean(app.allotted),
-          category: app.category || 'Retail'
-        }))
+        .map(normalizeApplication)
     }));
 
     // 3. Normalize trades
