@@ -68,23 +68,34 @@ function escapeSqlValue(val) {
 
 /**
  * Dumps the full MySQL database schema and data into a .sql file and compresses to .sql.gz
+ * Guarantees that only the real database (e.g. antarYudh_Prod) is backed up, excluding defaultdb/test databases.
  * @returns {Promise<{ sqlPath: string, gzPath: string, filename: string, totalTables: number, totalRows: number, sizeBytes: number }>}
  */
 export async function dumpDatabase() {
   ensureBackupDir();
+
+  // Target real production database
+  const targetDb = activeDbName === 'defaultdb' 
+    ? (process.env.DB_NAME_PROD || process.env.DB_NAME || 'antarYudh_Prod')
+    : activeDbName;
+
+  if (targetDb === 'defaultdb') {
+    throw new Error('Safety guard: Test database [defaultdb] backup sync is disabled. Only real database (antarYudh_Prod) will be backed up.');
+  }
+
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const baseName = `backup_${activeDbName}_${timestamp}`;
+  const baseName = `backup_${targetDb}_${timestamp}`;
   const sqlPath = path.join(BACKUPS_DIR, `${baseName}.sql`);
   const gzPath = path.join(BACKUPS_DIR, `${baseName}.sql.gz`);
 
-  console.log(`📦 [DB Dumper] Starting backup for database: [${activeDbName}]...`);
+  console.log(`📦 [DB Dumper] Starting backup for real database: [${targetDb}]...`);
 
-  // Get list of tables
-  const [tablesResult] = await promisePool.query('SHOW TABLES');
+  // Get list of tables from the real database
+  const [tablesResult] = await promisePool.query(`SHOW TABLES FROM \`${targetDb}\``);
   const tables = tablesResult.map(row => Object.values(row)[0]);
 
   if (tables.length === 0) {
-    throw new Error(`No tables found in database [${activeDbName}].`);
+    throw new Error(`No tables found in real database [${targetDb}].`);
   }
 
   const writeStream = fs.createWriteStream(sqlPath, { encoding: 'utf8' });
@@ -92,7 +103,7 @@ export async function dumpDatabase() {
   // SQL Header
   writeStream.write(`-- ========================================================\n`);
   writeStream.write(`-- antarYudh MySQL Database Dump\n`);
-  writeStream.write(`-- Database: ${activeDbName}\n`);
+  writeStream.write(`-- Database: ${targetDb}\n`);
   writeStream.write(`-- Generated: ${new Date().toISOString()}\n`);
   writeStream.write(`-- ========================================================\n\n`);
   writeStream.write(`SET FOREIGN_KEY_CHECKS = 0;\n`);
@@ -109,12 +120,12 @@ export async function dumpDatabase() {
     writeStream.write(`-- --------------------------------------------------------\n`);
     writeStream.write(`DROP TABLE IF EXISTS \`${table}\`;\n`);
 
-    const [createTableResult] = await promisePool.query(`SHOW CREATE TABLE \`${table}\``);
+    const [createTableResult] = await promisePool.query(`SHOW CREATE TABLE \`${targetDb}\`.\`${table}\``);
     const createTableSql = createTableResult[0]['Create Table'];
     writeStream.write(`${createTableSql};\n\n`);
 
     // Fetch data in chunks to prevent memory pressure
-    const [rows] = await promisePool.query(`SELECT * FROM \`${table}\``);
+    const [rows] = await promisePool.query(`SELECT * FROM \`${targetDb}\`.\`${table}\``);
     if (rows && rows.length > 0) {
       totalRows += rows.length;
       writeStream.write(`-- Dumping data for table \`${table}\` (${rows.length} rows)\n`);

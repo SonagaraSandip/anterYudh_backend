@@ -6,6 +6,7 @@ import { dumpDatabase } from '../utils/dbDumper.js';
 import { uploadBackupToDrive, listDriveBackups, cleanOldDriveBackups, isDriveConfigured } from '../utils/googleDrive.js';
 import { restoreDatabaseFromFile } from '../utils/dbRestorer.js';
 import { getLatestBackupInfo, recordBackupLog } from '../utils/backupTracker.js';
+import { checkAndRunDailyAutoBackup, isAutoBackupInProgress } from '../utils/autoBackupService.js';
 import promisePool, { activeDbName } from '../../config/db.js';
 
 const router = express.Router();
@@ -27,11 +28,15 @@ router.get('/status', async (req, res) => {
       fs.existsSync(path.resolve(__dirname, '../../config/google-service-account.json')) ||
       fs.existsSync(path.resolve(__dirname, '../../config/google_credentials.json'));
     
-    const isAutoBackupEnabled = process.env.ENABLE_AUTO_BACKUP === 'true';
+    const isAutoBackupEnabled = process.env.ENABLE_AUTO_BACKUP !== 'false';
     const retentionDays = parseInt(process.env.BACKUP_RETENTION_DAYS, 10) || 30;
 
     // Retrieve latest backup info from DB logs, Google Drive, and local filesystem
     const { lastBackupTime, lastBackupName, lastBackupSource } = await getLatestBackupInfo();
+    const isRunning = isAutoBackupInProgress();
+
+    // Check if daily backup is needed in background
+    checkAndRunDailyAutoBackup('backup_status_check').catch(() => {});
 
     res.json({
       success: true,
@@ -42,12 +47,26 @@ router.get('/status', async (req, res) => {
       hasInlineKey,
       hasKeyPath,
       isAutoBackupEnabled,
+      isAutoBackupRunning: isRunning,
       retentionDays,
-      schedule: isAutoBackupEnabled ? 'Every day at 00:00 (Midnight)' : 'Disabled',
+      schedule: isAutoBackupEnabled ? 'Smart Daily (First online/morning launch & Midnight 00:00)' : 'Disabled',
       lastBackupTime,
       lastBackupName,
       lastBackupSource
     });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/backup/auto-check
+ * Triggered automatically by frontend when user opens app / comes online
+ */
+router.post('/auto-check', async (req, res) => {
+  try {
+    const result = await checkAndRunDailyAutoBackup('client_online_ping');
+    res.json({ success: true, ...result });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

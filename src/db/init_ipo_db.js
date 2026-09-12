@@ -51,12 +51,13 @@ export const initDatabase = async () => {
     await db.query(`
       CREATE TABLE IF NOT EXISTS trades (
         id INT AUTO_INCREMENT PRIMARY KEY,
-        tradeType ENUM('stock', 'intraday') NOT NULL DEFAULT 'stock',
+        tradeType ENUM('stock', 'intraday', 'mtf') NOT NULL DEFAULT 'stock',
         assetName VARCHAR(255) NOT NULL,
         buyDate DATE NOT NULL,
         buyPrice DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
         quantity INT NOT NULL DEFAULT 1,
         charges DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+        mtfFundedAmount DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
         tradeDecision VARCHAR(100) NOT NULL DEFAULT 'Self',
         sellDate DATE NULL,
         sellPrice DECIMAL(12, 2) NULL,
@@ -164,7 +165,12 @@ export const initDatabase = async () => {
     await safeAddColumn('trades', 'transactions', 'transactions JSON DEFAULT NULL');
     await safeAddColumn('trades', 'tradeDecision', "tradeDecision VARCHAR(100) NOT NULL DEFAULT 'Self'");
     await safeAddColumn('trades', 'charges', 'charges DECIMAL(10, 2) NOT NULL DEFAULT 0.00');
-    await safeAddColumn('trades', 'tradeType', "tradeType ENUM('stock', 'intraday') NOT NULL DEFAULT 'stock'");
+    await safeAddColumn('trades', 'mtfFundedAmount', 'mtfFundedAmount DECIMAL(12, 2) NOT NULL DEFAULT 0.00');
+    try {
+      await db.query("ALTER TABLE trades MODIFY COLUMN tradeType ENUM('stock', 'intraday', 'mtf') NOT NULL DEFAULT 'stock'");
+    } catch (e) {
+      // Ignored if already modified
+    }
     await safeAddColumn('ipo_applications', 'category', "category VARCHAR(50) DEFAULT 'Retail'");
     await safeAddColumn('ipo_applications', 'allottedShares', "allottedShares INT DEFAULT 0");
     await safeAddColumn('ipo_applications', 'allottedPrice', "allottedPrice DECIMAL(12, 2) DEFAULT 0.00");

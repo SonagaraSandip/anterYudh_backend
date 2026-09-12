@@ -6,23 +6,43 @@ const router = express.Router();
 
 /**
  * Standard Equity Delivery Charges Auto-Calculator for IPOs
+ * - Allotment (Buy): 0 statutory/brokerage charges (ASBA application)
+ * - Exit (Sell): 0.1% or ₹20 max Brokerage, 0.1% STT, ₹20 DP charge (Groww ₹16.50 + CDSL ₹3.50), 18% GST
  */
-export const calculateIpoTradeCharges = (quantity, price, isBuy = true) => {
+export const calculateIpoTradeCharges = (quantity, price, isBuy = false) => {
   const qty = parseFloat(quantity) || 0;
   const prc = parseFloat(price) || 0;
   const tradeValue = qty * prc;
   if (tradeValue <= 0) return 0;
 
-  const brokerage = Math.min(20, tradeValue * 0.0005);
-  const exchangeCharge = tradeValue * 0.0000325;
+  // IPO allotment has zero charges
+  if (isBuy) return 0;
+
+  // Brokerage: Delivery standard 0.1% of trade value, min ₹5, max ₹20 per order
+  const brokerage = Math.max(5, Math.min(20, tradeValue * 0.001));
+
+  // Exchange Turnover Charge (NSE): 0.00297%
+  const exchangeCharge = tradeValue * 0.0000297;
+
+  // SEBI Turnover Fee: 0.0001% (₹10 / crore)
   const sebiCharge = tradeValue * 0.000001;
-  const gst = 0.18 * (brokerage + exchangeCharge + sebiCharge);
 
-  const stampDuty = isBuy ? (tradeValue * 0.00015) : 0;
+  // IPFT (NSE): 0.0001% (₹10 / crore)
+  const ipftCharge = tradeValue * 0.000001;
+
+  // Stamp Duty: 0 on sell
+  const stampDuty = 0;
+
+  // STT: 0.1% on delivery sell
   const stt = tradeValue * 0.001;
-  const dpCharge = (!isBuy) ? 21.50 : 0;
 
-  const totalCharges = brokerage + exchangeCharge + sebiCharge + gst + stampDuty + stt + dpCharge;
+  // DP Charges: ₹20 flat (Groww ₹16.50 + CDSL ₹3.50)
+  const dpCharge = 20.00;
+
+  // GST: 18% on (Brokerage + Exchange Charge + SEBI Fee + IPFT Fee)
+  const gst = 0.18 * (brokerage + exchangeCharge + sebiCharge + ipftCharge);
+
+  const totalCharges = brokerage + exchangeCharge + sebiCharge + ipftCharge + gst + stampDuty + stt + dpCharge;
   return Math.round(totalCharges * 100) / 100;
 };
 
@@ -368,7 +388,7 @@ router.post('/:ipoId/application/:personName/partial-sell', async (req, res) => 
           date: ipo.createdAt ? String(ipo.createdAt).slice(0, 10) : getLocalDateString(),
           price: basePrice,
           quantity: baseShares,
-          charges: app.charges || 0,
+          charges: 0,
           notes: 'IPO Allotment'
         }];
 

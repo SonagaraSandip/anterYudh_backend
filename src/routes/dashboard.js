@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import db, { activeDbName } from '../../config/db.js';
 import { getLatestBackupInfo } from '../utils/backupTracker.js';
 import { isDriveConfigured } from '../utils/googleDrive.js';
+import { checkAndRunDailyAutoBackup } from '../utils/autoBackupService.js';
 
 const router = express.Router();
 const __filename = fileURLToPath(import.meta.url);
@@ -124,6 +125,9 @@ router.get('/summary', async (req, res) => {
       lastBackupName,
       lastBackupSource
     };
+
+    // Asynchronously verify/trigger today's catch-up auto backup in background
+    checkAndRunDailyAutoBackup('dashboard_open').catch(() => {});
 
     res.json({
       success: true,

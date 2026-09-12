@@ -19,12 +19,19 @@ const normalizeTrade = (row) => {
   }
   return {
     ...row,
+    tradeType: (row.tradeType === 'intraday' || row.tradeType === 'mtf') ? row.tradeType : 'stock',
+    mtfFundedAmount: parseFloat(row.mtfFundedAmount) || 0,
     transactions: parsedTransactions
   };
 };
 
 /**
- * Standard Equity Charges Auto-Calculator (Brokerage, STT, Exchange, SEBI, GST, Stamp Duty, DP)
+ * Standard Equity Charges Auto-Calculator (Brokerage, STT, Exchange, SEBI, IPFT, GST, Stamp Duty, DP)
+ * Official Groww pricing (Sept 2026):
+ * - Delivery (CNC): 0.1% or ₹20 max (min ₹5), 0.1% STT (Buy & Sell), 0.015% Stamp Duty (Buy), ₹20 DP (Sell), 18% GST
+ * - Intraday (MIS): 0.1% or ₹20 max (min ₹5), 0.025% STT (Sell only), 0.003% Stamp Duty (Buy), 0 DP, 18% GST
+ * - MTF (Margin Trade): 0.1% (NO CAP, min ₹5), 0.1% STT (Buy & Sell), 0.015% Stamp Duty (Buy), ₹20 DP (Sell), 18% GST
+ * - Regulatory: Exchange (0.00297%), SEBI (0.0001%), IPFT (0.0001%)
  */
 export const calculateTradeCharges = (quantity, price, tradeType = 'stock', isBuy = true) => {
   const qty = parseFloat(quantity) || 0;
@@ -32,30 +39,61 @@ export const calculateTradeCharges = (quantity, price, tradeType = 'stock', isBu
   const tradeValue = qty * prc;
   if (tradeValue <= 0) return 0;
 
-  const isStock = tradeType !== 'intraday';
+  const isIntraday = tradeType === 'intraday';
+  const isMtf = tradeType === 'mtf';
 
-  const brokerage = Math.min(20, tradeValue * 0.0005);
-  const exchangeCharge = tradeValue * 0.0000325;
+  // Brokerage:
+  // - Delivery & Intraday: 0.1% of trade value, min ₹5, max ₹20 per order
+  // - MTF: 0.1% of trade value, min ₹5, NO CAP
+  let brokerage = 0;
+  if (isMtf) {
+    brokerage = Math.max(5, tradeValue * 0.001);
+  } else {
+    brokerage = Math.max(5, Math.min(20, tradeValue * 0.001));
+  }
+
+  // Exchange Turnover Charge (NSE): 0.00297%
+  const exchangeCharge = tradeValue * 0.0000297;
+
+  // SEBI Turnover Fee: 0.0001% (₹10 / crore)
   const sebiCharge = tradeValue * 0.000001;
-  const gst = 0.18 * (brokerage + exchangeCharge + sebiCharge);
+
+  // IPFT (NSE): 0.0001% (₹10 / crore)
+  const ipftCharge = tradeValue * 0.000001;
 
   let stampDuty = 0;
   let stt = 0;
+  let dpCharge = 0;
 
-  if (!isStock) {
-    // Intraday
+  if (isIntraday) {
+    // Intraday (MIS)
     stampDuty = isBuy ? (tradeValue * 0.00003) : 0;
     stt = isBuy ? 0 : (tradeValue * 0.00025);
+    dpCharge = 0;
   } else {
-    // Delivery (stock)
+    // Delivery (CNC) & MTF
     stampDuty = isBuy ? (tradeValue * 0.00015) : 0;
     stt = tradeValue * 0.001;
+    dpCharge = !isBuy ? 20.00 : 0;
   }
 
-  const dpCharge = (!isBuy && isStock) ? 21.50 : 0;
+  // GST: 18% on (Brokerage + Exchange Charge + SEBI Fee + IPFT Fee)
+  const gst = 0.18 * (brokerage + exchangeCharge + sebiCharge + ipftCharge);
 
-  const totalCharges = brokerage + exchangeCharge + sebiCharge + gst + stampDuty + stt + dpCharge;
+  const totalCharges = brokerage + exchangeCharge + sebiCharge + ipftCharge + gst + stampDuty + stt + dpCharge;
   return Math.round(totalCharges * 100) / 100;
+};
+
+/**
+ * MTF Daily & Total Holding Interest Calculator
+ * Annual Interest Rate: 14.95% on funded amount
+ */
+export const calculateMtfInterest = (fundedAmount, holdingDays = 0, annualRate = 14.95) => {
+  const funded = parseFloat(fundedAmount) || 0;
+  const days = Math.max(0, parseInt(holdingDays, 10) || 0);
+  if (funded <= 0 || days <= 0) return 0;
+  const dailyRate = (annualRate / 100) / 365;
+  return Math.round(funded * dailyRate * days * 100) / 100;
 };
 
 // GET /api/trades with filtering (?month=, ?quarter=, ?search=, ?year=, ?tradeType=)
@@ -67,7 +105,7 @@ router.get('/', async (req, res) => {
     const conditions = [];
 
     // Trade Type Filter
-    if (tradeType && (tradeType === 'stock' || tradeType === 'intraday')) {
+    if (tradeType && (tradeType === 'stock' || tradeType === 'intraday' || tradeType === 'mtf')) {
       conditions.push('tradeType = ?');
       params.push(tradeType);
     }
@@ -136,6 +174,7 @@ router.post('/', async (req, res) => {
       buyPrice,
       quantity,
       charges,
+      mtfFundedAmount,
       tradeDecision,
       sellDate,
       sellPrice,
@@ -147,7 +186,7 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Asset Name is required' });
     }
 
-    const cleanTradeType = tradeType === 'intraday' ? 'intraday' : 'stock';
+    const cleanTradeType = (tradeType === 'intraday' || tradeType === 'mtf') ? tradeType : 'stock';
     const cleanAssetName = assetName.trim().toUpperCase();
     const cleanBuyDate = getLocalDateString(buyDate);
     const cleanBuyPrice = parseFloat(buyPrice) || 0;
@@ -157,6 +196,7 @@ router.post('/', async (req, res) => {
     const cleanSellPrice = sellPrice !== undefined && sellPrice !== null && sellPrice !== ''
       ? parseFloat(sellPrice)
       : null;
+    const cleanMtfFunded = parseFloat(mtfFundedAmount) || (cleanTradeType === 'mtf' ? (cleanBuyPrice * cleanQty * 0.75) : 0);
 
     // Calculate auto charges if not manually specified (> 0)
     const rawCharges = parseFloat(charges);
@@ -189,9 +229,8 @@ router.post('/', async (req, res) => {
       cleanCharges = processedTx.reduce((sum, tx) => sum + (parseFloat(tx.charges) || 0), 0);
     } else {
       // Build default initial BUY + optional SELL transaction legs with auto charges
-      const buyLegCharge = (!isNaN(rawCharges) && rawCharges > 0 && !cleanSellPrice)
-        ? rawCharges
-        : autoBuyCharges;
+      const buyLegCharge = autoBuyCharges;
+      const sellLegCharge = autoSellCharges;
 
       cleanTransactionsJson = JSON.stringify([
         {
@@ -209,7 +248,7 @@ router.post('/', async (req, res) => {
           date: cleanSellDate || cleanBuyDate,
           price: cleanSellPrice,
           quantity: cleanQty,
-          charges: autoSellCharges,
+          charges: sellLegCharge,
           notes: 'Full Exit'
         }] : [])
       ]);
@@ -217,8 +256,8 @@ router.post('/', async (req, res) => {
 
     const [result] = await db.query(
       `INSERT INTO trades 
-        (tradeType, assetName, buyDate, buyPrice, quantity, charges, tradeDecision, sellDate, sellPrice, notes, transactions)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (tradeType, assetName, buyDate, buyPrice, quantity, charges, mtfFundedAmount, tradeDecision, sellDate, sellPrice, notes, transactions)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         cleanTradeType,
         cleanAssetName,
@@ -226,6 +265,7 @@ router.post('/', async (req, res) => {
         cleanBuyPrice,
         cleanQty,
         cleanCharges,
+        cleanMtfFunded,
         cleanDecision,
         cleanSellDate,
         cleanSellPrice,
@@ -253,6 +293,7 @@ const handleUpdateTrade = async (req, res) => {
       buyPrice,
       quantity,
       charges,
+      mtfFundedAmount,
       tradeDecision,
       sellDate,
       sellPrice,
@@ -269,10 +310,14 @@ const handleUpdateTrade = async (req, res) => {
     const updates = [];
     const params = [];
 
-    const finalTradeType = tradeType !== undefined ? (tradeType === 'intraday' ? 'intraday' : 'stock') : currentTrade.tradeType;
+    const finalTradeType = tradeType !== undefined ? ((tradeType === 'intraday' || tradeType === 'mtf') ? tradeType : 'stock') : currentTrade.tradeType;
     if (tradeType !== undefined) {
       updates.push('tradeType = ?');
       params.push(finalTradeType);
+    }
+    if (mtfFundedAmount !== undefined) {
+      updates.push('mtfFundedAmount = ?');
+      params.push(parseFloat(mtfFundedAmount) || 0);
     }
     if (assetName !== undefined) {
       updates.push('assetName = ?');
@@ -309,7 +354,7 @@ const handleUpdateTrade = async (req, res) => {
     }
     if (sellDate !== undefined) {
       updates.push('sellDate = ?');
-      params.push(sellDate ? sellDate.slice(0, 10) : null);
+      params.push(sellDate ? getLocalDateString(sellDate) : null);
     }
     if (notes !== undefined) {
       updates.push('notes = ?');
@@ -405,7 +450,7 @@ router.post('/:id/partial-sell', async (req, res) => {
           date: trade.buyDate,
           price: parseFloat(trade.buyPrice) || 0,
           quantity: parseInt(trade.quantity, 10) || 1,
-          charges: parseFloat(trade.charges) || calculateTradeCharges(trade.quantity, trade.buyPrice, trade.tradeType, true),
+          charges: calculateTradeCharges(trade.quantity, trade.buyPrice, trade.tradeType, true),
           notes: trade.notes || 'Initial Entry'
         }];
 
@@ -491,7 +536,7 @@ router.post('/:id/partial-buy', async (req, res) => {
           date: trade.buyDate,
           price: parseFloat(trade.buyPrice) || 0,
           quantity: parseInt(trade.quantity, 10) || 1,
-          charges: parseFloat(trade.charges) || calculateTradeCharges(trade.quantity, trade.buyPrice, trade.tradeType, true),
+          charges: calculateTradeCharges(trade.quantity, trade.buyPrice, trade.tradeType, true),
           notes: trade.notes || 'Initial Entry'
         }];
 

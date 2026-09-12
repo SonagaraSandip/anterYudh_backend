@@ -14,9 +14,6 @@ import dashboardRoutes from './src/routes/dashboard.js';
 import { initDatabase } from './src/db/init_ipo_db.js';
 import promisePool, { activeDbName } from './config/db.js';
 import cron from 'node-cron';
-import { dumpDatabase } from './src/utils/dbDumper.js';
-import { uploadBackupToDrive, cleanOldDriveBackups } from './src/utils/googleDrive.js';
-import { recordBackupLog } from './src/utils/backupTracker.js';
 
 dotenv.config();
 const app = express();
@@ -79,41 +76,23 @@ app.get('/api/system/status', async (req, res) => {
   }
 });
 
+import { checkAndRunDailyAutoBackup } from './src/utils/autoBackupService.js';
+
 // Setup Automated Daily Midnight Backup Cron (00:00 AM)
 const setupBackupCron = () => {
-  const isAutoBackupEnabled = process.env.ENABLE_AUTO_BACKUP === 'true';
+  const isAutoBackupEnabled = process.env.ENABLE_AUTO_BACKUP !== 'false';
   if (!isAutoBackupEnabled) {
-    console.log('ℹ️ [Cron] Automated database backup is disabled (ENABLE_AUTO_BACKUP != true)');
+    console.log('ℹ️ [Cron] Automated database backup is disabled (ENABLE_AUTO_BACKUP == false)');
     return;
   }
 
   // Runs every day at 00:00 midnight
   cron.schedule('0 0 * * *', async () => {
-    console.log('⏰ [Cron] Triggering scheduled midnight database backup...');
-    try {
-      const dump = await dumpDatabase();
-      let driveRes = null;
-      try {
-        driveRes = await uploadBackupToDrive(dump.gzPath, dump.filename);
-        await cleanOldDriveBackups();
-        console.log('✅ [Cron] Daily backup uploaded to Google Drive successfully.');
-      } catch (driveErr) {
-        console.warn('⚠️ [Cron] Google Drive upload failed:', driveErr.message);
-      }
-
-      await recordBackupLog({
-        filename: dump.filename,
-        sizeBytes: dump.sizeBytes,
-        driveFileId: driveRes?.id || null,
-        status: driveRes ? 'success' : 'local',
-        source: 'cron'
-      });
-    } catch (dumpErr) {
-      console.error('❌ [Cron] Automated backup failed:', dumpErr.message);
-    }
+    console.log('⏰ [Cron] Triggering scheduled midnight database backup check...');
+    await checkAndRunDailyAutoBackup('midnight_cron');
   });
 
-  console.log('🕒 [Cron] Automated daily backup scheduled for 00:00 (Midnight) every day');
+  console.log('🕒 [Auto-Backup] Smart Daily Backup active: Runs on first online/app launch & Midnight (00:00)');
 };
 
 const PORT = process.env.PORT || 5000;
@@ -121,6 +100,10 @@ app.listen(PORT, async () => {
     console.log(`Server running on port ${PORT}`);
     await initDatabase();
     setupBackupCron();
+    // Catch-up check on server startup
+    setTimeout(() => {
+      checkAndRunDailyAutoBackup('server_startup');
+    }, 3000);
 });
 
 
