@@ -31,10 +31,28 @@ export const initDatabase = async () => {
       );
     `);
 
-    // 3. Cashflow Transactions (Expenses & Incomes) Table
+    // 3. Expense Trips (Grouped Travel & Event Expenses) Table
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS expense_trips (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        destination VARCHAR(255) DEFAULT '',
+        startDate DATE NULL,
+        endDate DATE NULL,
+        budget DECIMAL(12, 2) DEFAULT 0.00,
+        status ENUM('active', 'completed', 'planning') DEFAULT 'active',
+        coverColor VARCHAR(50) DEFAULT 'emerald',
+        notes TEXT,
+        createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      );
+    `);
+
+    // 4. Cashflow Transactions (Expenses & Incomes) Table
     await db.query(`
       CREATE TABLE IF NOT EXISTS cashflow_transactions (
         id INT AUTO_INCREMENT PRIMARY KEY,
+        tripId INT NULL DEFAULT NULL,
         type ENUM('expense', 'income') NOT NULL,
         title VARCHAR(255) NOT NULL,
         category VARCHAR(100) NOT NULL,
@@ -43,7 +61,8 @@ export const initDatabase = async () => {
         notes TEXT,
         transactionDate DATETIME NOT NULL,
         createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        FOREIGN KEY (tripId) REFERENCES expense_trips(id) ON DELETE SET NULL
       );
     `);
 
@@ -183,6 +202,7 @@ export const initDatabase = async () => {
     await safeAddColumn('personal_notes', 'isPinned', 'isPinned BOOLEAN DEFAULT FALSE');
     await safeAddColumn('personal_notes', 'color', "color VARCHAR(50) DEFAULT 'indigo'");
     await safeAddColumn('personal_buy_items', 'savedAmount', 'savedAmount DECIMAL(12, 2) NOT NULL DEFAULT 0.00');
+    await safeAddColumn('cashflow_transactions', 'tripId', 'tripId INT NULL DEFAULT NULL');
 
     // Performance Optimization: Safe Index Additions for Ultra-Fast Queries
     const safeAddIndex = async (tableName, indexName, indexCols) => {
@@ -198,7 +218,9 @@ export const initDatabase = async () => {
 
     await safeAddIndex('ipos', 'idx_ipos_status_created', 'status, createdAt');
     await safeAddIndex('ipo_applications', 'idx_ipo_apps_ipoid', 'ipoId');
+    await safeAddIndex('expense_trips', 'idx_trips_status', 'status, createdAt');
     await safeAddIndex('cashflow_transactions', 'idx_cashflow_txdate_type', 'transactionDate, type');
+    await safeAddIndex('cashflow_transactions', 'idx_cashflow_tripId', 'tripId');
     await safeAddIndex('trades', 'idx_trades_buydate_type', 'buyDate, tradeType');
     await safeAddIndex('personal_notes', 'idx_notes_pinned_updated', 'isPinned, updatedAt');
     await safeAddIndex('personal_buy_items', 'idx_buy_priority', 'priority, updatedAt');

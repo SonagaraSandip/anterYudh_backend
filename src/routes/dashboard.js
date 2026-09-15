@@ -71,6 +71,7 @@ router.get('/summary', async (req, res) => {
       [appsRows],
       [tradesRows],
       [expensesRows],
+      [tripsRows],
       [notesRows],
       [buyRows],
       skillsResult,
@@ -79,7 +80,26 @@ router.get('/summary', async (req, res) => {
       db.query('SELECT * FROM ipos ORDER BY id DESC'),
       db.query('SELECT * FROM ipo_applications ORDER BY id ASC'),
       db.query('SELECT * FROM trades ORDER BY buyDate DESC, id DESC'),
-      db.query('SELECT * FROM cashflow_transactions ORDER BY transactionDate DESC, id DESC'),
+      db.query(`
+        SELECT 
+          ct.*,
+          et.name AS tripName,
+          et.destination AS tripDestination,
+          et.coverColor AS tripCoverColor
+        FROM cashflow_transactions ct
+        LEFT JOIN expense_trips et ON ct.tripId = et.id
+        ORDER BY ct.transactionDate DESC, ct.id DESC
+      `),
+      db.query(`
+        SELECT 
+          et.*,
+          COALESCE(SUM(CASE WHEN ct.type = 'expense' THEN ct.amount ELSE 0 END), 0) AS totalSpent,
+          COUNT(ct.id) AS expenseCount
+        FROM expense_trips et
+        LEFT JOIN cashflow_transactions ct ON et.id = ct.tripId
+        GROUP BY et.id
+        ORDER BY et.startDate DESC, et.id DESC
+      `),
       db.query('SELECT * FROM personal_notes ORDER BY isPinned DESC, updatedAt DESC, id DESC'),
       db.query("SELECT * FROM personal_buy_items ORDER BY FIELD(priority, 'High', 'Medium', 'Low'), updatedAt DESC, id DESC"),
       db.query("SELECT * FROM learning_skills ORDER BY FIELD(status, 'Learning', 'Planned', 'Completed'), FIELD(priority, 'High', 'Medium', 'Low'), updatedAt DESC").catch(() => [[]]),
@@ -135,6 +155,7 @@ router.get('/summary', async (req, res) => {
       ipos,
       trades,
       expenses: expensesRows,
+      trips: tripsRows,
       notes: notesRows,
       buyItems: buyRows,
       skills: skillsRows,
