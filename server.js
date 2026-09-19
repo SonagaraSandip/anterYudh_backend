@@ -14,6 +14,7 @@ import dashboardRoutes from './src/routes/dashboard.js';
 import { initDatabase } from './src/db/init_ipo_db.js';
 import promisePool, { activeDbName } from './config/db.js';
 import cron from 'node-cron';
+import { checkAndRunDailyAutoBackup } from './src/utils/autoBackupService.js';
 
 dotenv.config();
 const app = express();
@@ -75,8 +76,6 @@ app.get('/api/system/status', async (req, res) => {
     });
   }
 });
-
-import { checkAndRunDailyAutoBackup } from './src/utils/autoBackupService.js';
 
 // Setup Automated Daily Midnight Backup Cron (00:00 AM)
 const setupBackupCron = () => {
